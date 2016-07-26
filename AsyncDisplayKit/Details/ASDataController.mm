@@ -226,11 +226,13 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   NSMutableArray *editingNodes = _editingNodes[kind];
   ASInsertElementsIntoMultidimensionalArrayAtIndexPaths(editingNodes, indexPaths, nodes);
   
+  // Deep copy is critical here, or future edits to the sub-arrays will pollute state between _editing and _complete on different threads.
+  NSMutableArray *completedNodes = ASTwoDimensionalArrayDeepMutableCopy(editingNodes);
+  
   weakify(self);
   [_mainSerialQueue performBlockOnMainThread:^{
     strongifyOrExit(self);
-    ASDisplayNodeAssertNotNil(self->_completedNodes[kind], nil);
-    ASInsertElementsIntoMultidimensionalArrayAtIndexPaths(self->_completedNodes[kind], indexPaths, nodes);
+    self->_completedNodes[kind] = completedNodes;
     if (completionBlock) {
       completionBlock(nodes, indexPaths);
     }
@@ -258,7 +260,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   }];
 }
 
-- (void)insertSections:(NSMutableArray *)newSections ofKind:(NSString *)kind atIndexSet:(NSIndexSet *)indexSet completion:(void (^)(NSArray *sections, NSIndexSet *indexSet))completionBlock
+- (void)insertSections:(NSMutableArray *)sections ofKind:(NSString *)kind atIndexSet:(NSIndexSet *)indexSet completion:(void (^)(NSArray *sections, NSIndexSet *indexSet))completionBlock
 {
   if (!indexSet.count|| _dataSource == nil) {
     return;
@@ -268,18 +270,15 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
     _editingNodes[kind] = [NSMutableArray array];
   }
   
-  [_editingNodes[kind] insertObjects:newSections atIndexes:indexSet];
+  [_editingNodes[kind] insertObjects:sections atIndexes:indexSet];
+  
+  // Deep copy is critical here, or future edits to the sub-arrays will pollute state between _editing and _complete on different threads.
+  NSArray *sectionsForCompleted = ASTwoDimensionalArrayDeepMutableCopy(sections);
   
   weakify(self);
   [_mainSerialQueue performBlockOnMainThread:^{
     strongifyOrExit(self);
-    NSMutableArray *sections = self->_completedNodes[kind];
-    if (sections == nil) {
-      sections = [NSMutableArray array];
-      self->_completedNodes[kind] = sections;
-    }
-    [sections insertObjects:newSections atIndexes:indexSet];
-    
+    [self->_completedNodes[kind] insertObjects:sectionsForCompleted atIndexes:indexSet];
     if (completionBlock) {
       completionBlock(sections, indexSet);
     }
@@ -404,6 +403,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   [self performEditCommandWithBlock:^{
     ASDisplayNodeAssertMainThread();
     strongifyOrExit(self);
+    RETURN_IF_NO_DATASOURCE();
     dispatch_group_wait(self->_editingTransactionGroup, DISPATCH_TIME_FOREVER);
 
     NSUInteger sectionCount = [self->_dataSource numberOfSectionsInDataController:self];
@@ -475,6 +475,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
 - (NSArray<ASIndexedNodeContext *> *)_populateFromDataSourceWithSectionIndexSet:(NSIndexSet *)indexSet
 {
   ASDisplayNodeAssertMainThread();
+  RETURN_IF_NO_DATASOURCE(nil);
   
   id<ASEnvironment> environment = [self.environmentDelegate dataControllerEnvironment];
   ASEnvironmentTraitCollection environmentTraitCollection = environment.environmentTraitCollection;
@@ -616,6 +617,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   [self performEditCommandWithBlock:^{
     ASDisplayNodeAssertMainThread();
     strongifyOrExit(self);
+    RETURN_IF_NO_DATASOURCE();
     LOG(@"Edit Command - insertSections: %@", sections);
     dispatch_group_wait(self->_editingTransactionGroup, DISPATCH_TIME_FOREVER);
     
