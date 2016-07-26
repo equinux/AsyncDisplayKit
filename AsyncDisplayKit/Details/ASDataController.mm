@@ -406,19 +406,17 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
     RETURN_IF_NO_DATASOURCE();
     dispatch_group_wait(self->_editingTransactionGroup, DISPATCH_TIME_FOREVER);
 
-    NSUInteger sectionCount = [self->_dataSource numberOfSectionsInDataController:self];
+    [self invalidateDataSourceItemCounts];
+    NSUInteger sectionCount = [self itemCountsFromDataSource].size();
     NSIndexSet *sectionIndexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, sectionCount)];
     NSArray<ASIndexedNodeContext *> *contexts = [self _populateFromDataSourceWithSectionIndexSet:sectionIndexSet];
-
-    [self invalidateDataSourceItemCounts];
-    // Fetch the new item counts upfront.
-    [self itemCountsFromDataSource];
     
     // Allow subclasses to perform setup before going into the edit transaction
     [self prepareForReloadData];
     
     dispatch_group_async(self->_editingTransactionGroup, self->_editingTransactionQueue, ^{
       strongifyOrExit(self);
+      RETURN_IF_NO_DATASOURCE();
       LOG(@"Edit Transaction - reloadData");
       
       // Remove everything that existed before the reload, now that we're ready to insert replacements
@@ -480,10 +478,11 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   id<ASEnvironment> environment = [self.environmentDelegate dataControllerEnvironment];
   ASEnvironmentTraitCollection environmentTraitCollection = environment.environmentTraitCollection;
   
+  std::vector<NSInteger> counts = [self itemCountsFromDataSource];
   NSMutableArray<ASIndexedNodeContext *> *contexts = [NSMutableArray array];
   [indexSet enumerateRangesUsingBlock:^(NSRange range, BOOL * _Nonnull stop) {
     for (NSUInteger sectionIndex = range.location; sectionIndex < NSMaxRange(range); sectionIndex++) {
-      NSUInteger itemCount = [_dataSource dataController:self rowsInSection:sectionIndex];
+      NSUInteger itemCount = counts[sectionIndex];
       for (NSUInteger i = 0; i < itemCount; i++) {
         NSIndexPath *indexPath = [NSIndexPath indexPathForItem:i inSection:sectionIndex];
         ASCellNodeBlock nodeBlock = [_dataSource dataController:self nodeBlockAtIndexPath:indexPath];
