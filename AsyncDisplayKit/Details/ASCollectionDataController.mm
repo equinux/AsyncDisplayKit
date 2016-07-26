@@ -243,20 +243,20 @@
 
 - (void)_populateSupplementaryNodeOfKind:(NSString *)kind atIndexPath:(NSIndexPath *)indexPath mutableContexts:(NSMutableArray<ASIndexedNodeContext *> *)contexts environmentTraitCollection:(ASEnvironmentTraitCollection)environmentTraitCollection
 {
-      ASCellNodeBlock supplementaryCellBlock;
-      if (_dataSourceImplementsSupplementaryNodeBlockOfKindAtIndexPath) {
-        supplementaryCellBlock = [self.collectionDataSource dataController:self supplementaryNodeBlockOfKind:kind atIndexPath:indexPath];
-      } else {
-        ASCellNode *supplementaryNode = [self.collectionDataSource dataController:self supplementaryNodeOfKind:kind atIndexPath:indexPath];
-        supplementaryCellBlock = ^{ return supplementaryNode; };
-      }
-      
-      ASSizeRange constrainedSize = [self constrainedSizeForNodeOfKind:kind atIndexPath:indexPath];
-      ASIndexedNodeContext *context = [[ASIndexedNodeContext alloc] initWithNodeBlock:supplementaryCellBlock
-                                                                            indexPath:indexPath
-                                                                        constrainedSize:constrainedSize
-                                                           environmentTraitCollection:environmentTraitCollection];
-      [contexts addObject:context];
+  ASCellNodeBlock supplementaryCellBlock;
+  if (_dataSourceImplementsSupplementaryNodeBlockOfKindAtIndexPath) {
+    supplementaryCellBlock = [self.collectionDataSource dataController:self supplementaryNodeBlockOfKind:kind atIndexPath:indexPath];
+  } else {
+    ASCellNode *supplementaryNode = [self.collectionDataSource dataController:self supplementaryNodeOfKind:kind atIndexPath:indexPath];
+    supplementaryCellBlock = ^{ return supplementaryNode; };
+  }
+  
+  ASSizeRange constrainedSize = [self constrainedSizeForNodeOfKind:kind atIndexPath:indexPath];
+  ASIndexedNodeContext *context = [[ASIndexedNodeContext alloc] initWithNodeBlock:supplementaryCellBlock
+                                                                        indexPath:indexPath
+                                                                    constrainedSize:constrainedSize
+                                                       environmentTraitCollection:environmentTraitCollection];
+  [contexts addObject:context];
 }
 
 #pragma mark - Sizing query

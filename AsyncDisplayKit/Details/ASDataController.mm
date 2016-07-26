@@ -145,6 +145,16 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
 }
 
 /**
+ * Measure and layout the given node with the constrained size range.
+ */
+- (void)_layoutNode:(ASCellNode *)node withConstrainedSize:(ASSizeRange)constrainedSize
+{
+  CGRect frame = CGRectZero;
+  frame.size = [node measureWithSizeRange:constrainedSize].size;
+  node.frame = frame;
+}
+
+/**
  * Measures and defines the layout for each node in optimized batches on an editing queue, inserting the results into the backing store.
  */
 - (void)_batchLayoutAndInsertNodesFromContexts:(NSArray<ASIndexedNodeContext *> *)contexts withAnimationOptions:(ASDataControllerAnimationOptions)animationOptions
@@ -180,10 +190,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
       node = [[ASCellNode alloc] init]; // Fallback to avoid crash for production apps.
     }
     
-    // Measure the node.
-    CGRect frame = CGRectZero;
-    frame.size = [node measureWithSizeRange:context.constrainedSize].size;
-    node.frame = frame;
+    [self _layoutNode:node withConstrainedSize:context.constrainedSize];
     
     allocatedNodeBuffer[i] = node;
   });
@@ -219,13 +226,11 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   NSMutableArray *editingNodes = _editingNodes[kind];
   ASInsertElementsIntoMultidimensionalArrayAtIndexPaths(editingNodes, indexPaths, nodes);
   
-  // Deep copy is critical here, or future edits to the sub-arrays will pollute state between _editing and _complete on different threads.
-  NSMutableArray *completedNodes = ASTwoDimensionalArrayDeepMutableCopy(editingNodes);
-  
   weakify(self);
   [_mainSerialQueue performBlockOnMainThread:^{
     strongifyOrExit(self);
-    self->_completedNodes[kind] = completedNodes;
+    ASDisplayNodeAssertNotNil(self->_completedNodes[kind], nil);
+    ASInsertElementsIntoMultidimensionalArrayAtIndexPaths(self->_completedNodes[kind], indexPaths, nodes);
     if (completionBlock) {
       completionBlock(nodes, indexPaths);
     }
@@ -239,9 +244,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   }
 
   LOG(@"_deleteNodesAtIndexPaths:%@ ofKind:%@, full index paths in _editingNodes = %@", indexPaths, kind, ASIndexPathsForTwoDimensionalArray(_editingNodes[kind]));
-  NSMutableArray *editingNodes = _editingNodes[kind];
-  ASDeleteElementsInMultidimensionalArrayAtIndexPaths(editingNodes, indexPaths);
-  _editingNodes[kind] = editingNodes;
+  ASDeleteElementsInMultidimensionalArrayAtIndexPaths(_editingNodes[kind], indexPaths);
 
   weakify(self);
   [_mainSerialQueue performBlockOnMainThread:^{
@@ -255,7 +258,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   }];
 }
 
-- (void)insertSections:(NSMutableArray *)sections ofKind:(NSString *)kind atIndexSet:(NSIndexSet *)indexSet completion:(void (^)(NSArray *sections, NSIndexSet *indexSet))completionBlock
+- (void)insertSections:(NSMutableArray *)newSections ofKind:(NSString *)kind atIndexSet:(NSIndexSet *)indexSet completion:(void (^)(NSArray *sections, NSIndexSet *indexSet))completionBlock
 {
   if (!indexSet.count|| _dataSource == nil) {
     return;
@@ -265,15 +268,18 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
     _editingNodes[kind] = [NSMutableArray array];
   }
   
-  [_editingNodes[kind] insertObjects:sections atIndexes:indexSet];
-  
-  // Deep copy is critical here, or future edits to the sub-arrays will pollute state between _editing and _complete on different threads.
-  NSArray *sectionsForCompleted = ASTwoDimensionalArrayDeepMutableCopy(sections);
+  [_editingNodes[kind] insertObjects:newSections atIndexes:indexSet];
   
   weakify(self);
   [_mainSerialQueue performBlockOnMainThread:^{
     strongifyOrExit(self);
-    [self->_completedNodes[kind] insertObjects:sectionsForCompleted atIndexes:indexSet];
+    NSMutableArray *sections = self->_completedNodes[kind];
+    if (sections == nil) {
+      sections = [NSMutableArray array];
+      self->_completedNodes[kind] = sections;
+    }
+    [sections insertObjects:newSections atIndexes:indexSet];
+    
     if (completionBlock) {
       completionBlock(sections, indexSet);
     }
@@ -833,6 +839,7 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
     dispatch_group_async(self->_editingTransactionGroup, self->_editingTransactionQueue, ^{
       strongifyOrExit(self);
       [self->_mainSerialQueue performBlockOnMainThread:^{
+        strongifyOrExit(self);
         for (NSString *kind in self->_completedNodes) {
           [self _relayoutNodesOfKind:kind];
         }
@@ -853,11 +860,10 @@ NSString * const ASDataControllerRowNodeKind = @"_ASDataControllerRowNodeKind";
   for (NSMutableArray *section in nodes) {
     NSUInteger rowIndex = 0;
     for (ASCellNode *node in section) {
+      RETURN_IF_NO_DATASOURCE();
       NSIndexPath *indexPath = [NSIndexPath indexPathForRow:rowIndex inSection:sectionIndex];
       ASSizeRange constrainedSize = [self constrainedSizeForNodeOfKind:kind atIndexPath:indexPath];
-      CGRect frame = CGRectZero;
-      frame.size = [node measureWithSizeRange:constrainedSize].size;
-      node.frame = frame;
+      [self _layoutNode:node withConstrainedSize:constrainedSize];
       rowIndex += 1;
     }
     sectionIndex += 1;
