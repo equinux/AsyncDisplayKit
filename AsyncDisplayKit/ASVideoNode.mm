@@ -520,6 +520,12 @@ static NSString * const kStatus = @"status";
   return _player;
 }
 
+- (AVPlayerLayer *)playerLayer
+{
+  ASDN::MutexLocker l(__instanceLock__);
+  return (AVPlayerLayer *)_playerNode.layer;
+}
+
 - (id<ASVideoNodeDelegate>)delegate{
   return _delegate;
 }
