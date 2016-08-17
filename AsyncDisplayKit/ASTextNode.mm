@@ -27,6 +27,8 @@
 #import "ASInternalHelpers.h"
 #import "ASLayout.h"
 
+#import "CGRect+ASConvenience.h"
+
 static const NSTimeInterval ASTextNodeHighlightFadeOutDuration = 0.15;
 static const NSTimeInterval ASTextNodeHighlightFadeInDuration = 0.1;
 static const CGFloat ASTextNodeHighlightLightOpacity = 0.11;
@@ -48,6 +50,8 @@ struct ASTextNodeDrawParameter {
   UIColor *_cachedShadowUIColor;
   CGFloat _shadowOpacity;
   CGFloat _shadowRadius;
+  
+  UIEdgeInsets _textContainerInset;
 
   NSArray *_exclusionPaths;
 
@@ -213,7 +217,15 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
   ASDN::MutexLocker l(__instanceLock__);
 
   if (_renderer == nil) {
-    CGSize constrainedSize = _constrainedSize.width != -INFINITY ? _constrainedSize : bounds.size;
+    CGSize constrainedSize;
+    if (_constrainedSize.width != -INFINITY) {
+      constrainedSize = _constrainedSize;
+    } else {
+      constrainedSize = bounds.size;
+      constrainedSize.width -= (_textContainerInset.left + _textContainerInset.right);
+      constrainedSize.height -= (_textContainerInset.top + _textContainerInset.bottom);
+    }
+    
     _renderer = [[ASTextKitRenderer alloc] initWithTextKitAttributes:[self _rendererAttributes]
                                                      constrainedSize:constrainedSize];
   }
@@ -279,6 +291,24 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
 
 #pragma mark - Layout and Sizing
 
+- (void)setTextContainerInset:(UIEdgeInsets)textContainerInset
+{
+  ASDN::MutexLocker l(__instanceLock__);
+  
+  BOOL needsUpdate = !UIEdgeInsetsEqualToEdgeInsets(textContainerInset, _textContainerInset);
+  if (needsUpdate) {
+    _textContainerInset = textContainerInset;
+    [self invalidateCalculatedLayout];
+    [self setNeedsLayout];
+  }
+}
+
+- (UIEdgeInsets)textContainerInset
+{
+  ASDN::MutexLocker l(__instanceLock__);
+  return _textContainerInset;
+}
+
 - (BOOL)_needInvalidateRendererForBoundsSize:(CGSize)boundsSize
 {
   ASDN::MutexLocker l(__instanceLock__);
@@ -290,6 +320,10 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
   // If the size is not the same as the constraint we provided to the renderer, start out assuming we need
   // a new one.  However, there are common cases where the constrained size doesn't need to be the same as calculated.
   CGSize rendererConstrainedSize = _renderer.constrainedSize;
+  
+  //inset bounds
+  boundsSize.width -= _textContainerInset.left + _textContainerInset.right;
+  boundsSize.height -= _textContainerInset.top + _textContainerInset.bottom;
   
   if (CGSizeEqualToSize(boundsSize, rendererConstrainedSize)) {
     return NO;
@@ -321,9 +355,14 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
   
   if (layout != nil) {
     ASDN::MutexLocker l(__instanceLock__);
-    if (CGSizeEqualToSize(_constrainedSize, layout.size) == NO) {
-      _constrainedSize = layout.size;
-      _renderer.constrainedSize = layout.size;
+    CGSize layoutSize = layout.size;
+    //Apply textContainerInset
+    layoutSize.width -= (_textContainerInset.left + _textContainerInset.right);
+    layoutSize.height -= (_textContainerInset.top + _textContainerInset.bottom);
+    
+    if (CGSizeEqualToSize(_constrainedSize, layoutSize) == NO) {
+      _constrainedSize = layoutSize;
+      _renderer.constrainedSize = layoutSize;
     }
   }
 }
@@ -334,6 +373,10 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
   ASDisplayNodeAssert(constrainedSize.height >= 0, @"Constrained height for text (%f) is too short", constrainedSize.height);
   
   ASDN::MutexLocker l(__instanceLock__);
+  
+  //remove textContainerInset
+  constrainedSize.width -= (_textContainerInset.left + _textContainerInset.right);
+  constrainedSize.height -= (_textContainerInset.top + _textContainerInset.bottom);
   
   _constrainedSize = constrainedSize;
   
@@ -353,6 +396,11 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
       self.descender *= _renderer.currentScaleFactor;
     }
   }
+  
+  //add textContainerInset
+  size.width += (_textContainerInset.left + _textContainerInset.right);
+  size.height += (_textContainerInset.top + _textContainerInset.bottom);
+  
   return size;
 }
 
@@ -465,6 +513,8 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
   ASDisplayNodeAssert(context, @"This is no good without a context.");
   
   CGContextSaveGState(context);
+  
+  CGContextTranslateCTM(context, _textContainerInset.left, _textContainerInset.top);
   
   ASTextKitRenderer *renderer = [self _rendererWithBounds:drawParameterBounds];
   UIEdgeInsets shadowPadding = [self shadowPaddingWithRenderer:renderer];
@@ -733,6 +783,13 @@ static NSArray *DefaultLinkAttributeNames = @[ NSLinkAttributeName ];
         for (NSValue *rectValue in highlightRects) {
           UIEdgeInsets shadowPadding = _renderer.shadower.shadowPadding;
           CGRect rendererRect = ASTextNodeAdjustRenderRectForShadowPadding(rectValue.CGRectValue, shadowPadding);
+
+          // The rects returned from renderer don't have `textContainerInset`,
+          // as well as they are using the `constrainedSize` for layout,
+          // so we can simply increase the rect by insets to get the full blown layout.
+          rendererRect.size.width += _textContainerInset.left + _textContainerInset.right;
+          rendererRect.size.height += _textContainerInset.top + _textContainerInset.bottom;
+
           CGRect highlightedRect = [self.layer convertRect:rendererRect toLayer:highlightTargetLayer];
 
           // We set our overlay layer's frame to the bounds of the highlight target layer.
@@ -855,7 +912,7 @@ static CGRect ASTextNodeAdjustRenderRectForShadowPadding(CGRect rendererRect, UI
   // FIXME: Replace this implementation with reusable CALayers that have .backgroundColor set.
   // This would completely eliminate the memory and performance cost of the backing store.
   CGSize size = self.calculatedSize;
-  if (CGSizeEqualToSize(size, CGSizeZero)) {
+  if ((size.width * size.height) < CGFLOAT_EPSILON) {
     return nil;
   }
   
